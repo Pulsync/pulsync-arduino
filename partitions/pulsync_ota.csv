@@ -1,0 +1,20 @@
+# Pulsync recommended partition table (4MB flash, dual-app OTA)
+#
+# OTA needs TWO app slots (ota_0 / ota_1) plus an otadata partition so the
+# device can flash a new image into the inactive slot and roll back on failure.
+# The ESP32 default single-app table CANNOT do OTA.
+#
+# Use it in platformio.ini:
+#     board_build.partitions = pulsync_ota.csv
+# (copy this file next to platformio.ini, or reference it by path)
+#
+# Layout: two ~1.9MB app slots + 128KB SPIFFS/LittleFS for the optional
+# offline queue module. Sized for the common 4MB ESP32 modules.
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x5000,
+otadata,    data, ota,     0xe000,   0x2000,
+app0,       app,  ota_0,   0x10000,  0x1E0000,
+app1,       app,  ota_1,   0x1F0000, 0x1E0000,
+spiffs,     data, spiffs,  0x3D0000, 0x20000,
+coredump,   data, coredump,0x3F0000, 0x10000,
