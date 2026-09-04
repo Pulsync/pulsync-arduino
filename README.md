@@ -175,7 +175,7 @@ top later without a device-side change.
 
 ## Documentation
 
-See [docs.pulsync.dev](https://docs.pulsync.dev) (coming soon)
+See [pulsync.in/docs](https://pulsync.in/docs) (coming soon)
 
 ## License
 

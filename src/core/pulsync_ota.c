@@ -490,7 +490,7 @@ void pulsync_ota_init(void) {
         ESP_LOGE(TAG, "so over-the-air updates cannot be applied. Fix it by selecting");
         ESP_LOGE(TAG, "a partition table with two app slots + otadata, e.g. in");
         ESP_LOGE(TAG, "platformio.ini add:  board_build.partitions = min_spiffs.csv");
-        ESP_LOGE(TAG, "See https://docs.pulsync.dev/ota for details.");
+        ESP_LOGE(TAG, "See https://pulsync.in/docs/ota for details.");
     }
 
     /* Confirm running partition if we booted after an OTA */
