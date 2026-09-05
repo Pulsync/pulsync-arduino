@@ -28,20 +28,20 @@ void setup() {
 
   // Send sensor data at configurable interval
   Pulsync.setInterval([]() {
-    float value = analogRead(SENSOR_PIN) * 0.1;
+    float value = analogRead(SENSOR_PIN) * 0.1f;
     Pulsync.send("sensor_value", value);
   }, readIntervalMs);
 
-  // Handle server commands
-  Pulsync.on("set_led", [](JsonObject payload) {
-    digitalWrite(LED_PIN, payload["value"] ? HIGH : LOW);
+  // Handle server commands: {"command":"set_led","payload":{"value":true}}
+  Pulsync.onBool("set_led", [](bool value) {
+    digitalWrite(LED_PIN, value ? HIGH : LOW);
   });
 
-  // Handle remote config updates
+  // Handle remote config updates (default value disambiguates the overload)
   Pulsync.onConfig("readInterval", [](int value) {
     readIntervalMs = value;
     Serial.printf("Read interval updated: %d ms\n", value);
-  });
+  }, 5000);
 }
 
 void loop() {

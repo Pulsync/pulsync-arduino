@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -110,7 +111,10 @@ static bool ota_hex_equal_ct(const char *a, const char *b) {
     return diff == 0;
 }
 
-#ifdef ARDUINO
+/* Cert bundle attach symbol — see pulsync_transport.c for the rationale.
+ * arduino-esp32 2.x (IDF 4.x) only has arduino_esp_crt_bundle_attach; from
+ * arduino-esp32 3.x (IDF 5.x) the standard esp_crt_bundle_attach is used. */
+#if defined(ARDUINO) && ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
 esp_err_t arduino_esp_crt_bundle_attach(void *conf);
 #define PULSYNC_CRT_BUNDLE_ATTACH arduino_esp_crt_bundle_attach
 #else

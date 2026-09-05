@@ -16,23 +16,23 @@ void setup() {
   Pulsync.setWiFi("YourSSID", "YourPassword");
   Pulsync.begin("PUL-XXXXXX");
 
-  // Handle commands from server
-  Pulsync.on("set_led", [](JsonObject payload) {
-    bool state = payload["value"];
+  // Handle a boolean command: server sends {"command":"set_led","payload":{"value":true}}
+  Pulsync.onBool("set_led", [](bool state) {
     digitalWrite(LED_PIN, state ? HIGH : LOW);
     Serial.printf("LED set to %s\n", state ? "ON" : "OFF");
   });
 
-  Pulsync.on("reboot", [](JsonObject payload) {
+  // Handle a no-value command (just triggers)
+  Pulsync.on("reboot", []() {
     Serial.println("Reboot command received");
     delay(1000);
     ESP.restart();
   });
 
-  // Handle remote config changes
+  // Handle remote config changes (default value disambiguates the overload)
   Pulsync.onConfig("blinkInterval", [](int value) {
     Serial.printf("Blink interval changed to %d ms\n", value);
-  });
+  }, 1000);
 }
 
 void loop() {

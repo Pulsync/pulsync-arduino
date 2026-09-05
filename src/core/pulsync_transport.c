@@ -14,14 +14,22 @@
 #include <ctype.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_http_client.h"
 #include "mqtt_client.h"
 #include "mdns.h"
 #include "esp_netif.h"
 
-/* Arduino-ESP32 cert bundle */
-#ifdef ARDUINO
+/* Cert bundle attach symbol.
+ *
+ * arduino-esp32 2.x (ESP-IDF 4.x) exposes the bundle only under the
+ * Arduino-specific symbol `arduino_esp_crt_bundle_attach`. From
+ * arduino-esp32 3.x (ESP-IDF 5.x) the standard IDF `esp_crt_bundle_attach`
+ * is available and the Arduino-specific symbol is gone. Native ESP-IDF
+ * always has the standard symbol. Pick accordingly so the library links on
+ * every combination. */
+#if defined(ARDUINO) && ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
 esp_err_t arduino_esp_crt_bundle_attach(void *conf);
 #define PULSYNC_CRT_BUNDLE_ATTACH arduino_esp_crt_bundle_attach
 #else
@@ -395,6 +403,23 @@ void pulsync_transport_start(void) {
     snprintf(uri, sizeof(uri), "%s://%s:%u",
              mqtt_tls ? "mqtts" : "mqtt", mqtt_host, mqtt_port);
 
+    /* The esp_mqtt_client_config_t layout changed in ESP-IDF 5.0: the flat
+     * fields were reorganized into nested broker/credentials/session/network
+     * structs. Support both so the library builds on IDF 4.x (arduino-esp32
+     * 2.x / older PlatformIO) and IDF 5.x (arduino-esp32 3.x / current). */
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .broker.address.uri = uri,
+        .credentials.username = "device",
+        .credentials.authentication.password = token,
+        .session.keepalive = 30,
+        .network.disable_auto_reconnect = false,  /* esp_mqtt handles reconnect */
+    };
+
+    if (mqtt_tls) {
+        mqtt_cfg.broker.verification.crt_bundle_attach = PULSYNC_CRT_BUNDLE_ATTACH;
+    }
+#else
     esp_mqtt_client_config_t mqtt_cfg = {
         .uri = uri,
         .username = "device",
@@ -406,6 +431,7 @@ void pulsync_transport_start(void) {
     if (mqtt_tls) {
         mqtt_cfg.crt_bundle_attach = PULSYNC_CRT_BUNDLE_ATTACH;
     }
+#endif
 
     s_mqtt = esp_mqtt_client_init(&mqtt_cfg);
     if (!s_mqtt) {

@@ -15,15 +15,15 @@ void setup() {
 
   // Send sensor data every 5 seconds
   Pulsync.setInterval([]() {
-    float temperature = analogRead(34) * 0.1;
+    float temperature = analogRead(34) * 0.1f;
     Pulsync.send("temperature", temperature);
   }, 5000);
 
   // Send grouped payload every 10 seconds
   Pulsync.setInterval([]() {
     Pulsync.beginPayload();
-    Pulsync.add("temperature", analogRead(34) * 0.1);
-    Pulsync.add("humidity", analogRead(35) * 0.05);
+    Pulsync.add("temperature", (float)(analogRead(34) * 0.1f));
+    Pulsync.add("humidity", (float)(analogRead(35) * 0.05f));
     Pulsync.endPayload();
   }, 10000);
 }
