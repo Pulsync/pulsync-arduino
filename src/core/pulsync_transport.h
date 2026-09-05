@@ -43,7 +43,7 @@ typedef enum {
 /** Transport config — set before init */
 typedef struct {
     char server_host[64];         /* e.g., "10.212.89.160" or "api.pulsync.in" */
-    uint16_t http_port;           /* HTTP port (default 3000 local, 443 hosted) */
+    uint16_t http_port;           /* HTTP port (default 3456 local, 443 hosted) */
     uint16_t mqtt_port;           /* MQTT port (default 1883 local, 8883 hosted) */
     char device_token[PULSYNC_TOKEN_MAXLEN];
     bool use_tls;                 /* TLS for both MQTT and HTTP */

@@ -251,7 +251,7 @@ void pulsync_transport_parse_url(const char *url, char *host, size_t host_len,
     }
 
     /* Default ports */
-    if (*http_port == 0) *http_port = *use_tls ? 443 : 3000;
+    if (*http_port == 0) *http_port = *use_tls ? 443 : 3456;
     *mqtt_port = *use_tls ? 8883 : 1883;
 }
 

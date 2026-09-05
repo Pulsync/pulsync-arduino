@@ -1,6 +1,6 @@
 {
   "name": "Pulsync",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Non-blocking task scheduler + real-time cloud sync for ESP32",
   "keywords": ["esp32", "iot", "scheduler", "cloud", "ota", "non-blocking", "setInterval", "setTimeout", "mqtt", "websocket"],
   "repository": {
