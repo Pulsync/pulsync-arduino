@@ -52,8 +52,8 @@ To pin a specific server (and skip discovery entirely), call `setServer()`
 before `begin()`:
 
 ```cpp
-Pulsync.setServer("192.168.1.50:3001");   // by IP
-Pulsync.setServer("pulsync.local:3001");  // by mDNS name (recommended)
+Pulsync.setServer("192.168.1.50:3000");   // by IP
+Pulsync.setServer("pulsync.local:3000");  // by mDNS name (recommended)
 Pulsync.setServer("pulsync.in");          // force hosted
 ```
 
