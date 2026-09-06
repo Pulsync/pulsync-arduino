@@ -43,19 +43,28 @@ Download ZIP from [Releases](https://github.com/pulsync/pulsync-arduino/releases
 
 ## Pointing at Your Server
 
-If you set nothing, the library **auto-discovers** the server: it tries the
-hosted cloud (`pulsync.in`) first, then a local server on the LAN
-(`pulsync.local` via mDNS). The first one that answers enrollment is used and
-remembered; if neither answers, the device reports "no server found" and retries.
+If you set nothing, the library **auto-discovers** the server: it tries a local
+server on the LAN (`pulsync.local` via mDNS) first, then the hosted cloud
+(`pulsync.in`). The first one that answers enrollment is used and remembered
+(so this discovery only happens on the first boot); if neither answers, the
+device reports "no server found" and retries.
 
-To pin a specific server (and skip discovery entirely), call `setServer()`
-before `begin()`:
+To control where the device connects, call one of these before `begin()`:
 
 ```cpp
-Pulsync.setServer("192.168.1.50:3456");   // by IP
+// Force a tier (hard override — no discovery, no fallback):
+Pulsync.setServerMode(Pulsync.LOCAL);   // only pulsync.local (self-hosted LAN)
+Pulsync.setServerMode(Pulsync.CLOUD);   // only the hosted cloud
+Pulsync.setServerMode(Pulsync.AUTO);    // default: discover local → cloud
+
+// Or pin an exact server URL (highest precedence — beats setServerMode):
 Pulsync.setServer("pulsync.local:3456");  // by mDNS name (recommended)
-Pulsync.setServer("pulsync.in");          // force hosted
+Pulsync.setServer("192.168.1.50:3456");   // by IP
+Pulsync.setServer("pulsync.in");          // explicit hosted host
 ```
+
+Precedence: `setServer(url)` > `setServerMode()` > a server saved from the
+captive portal > auto-discovery.
 
 Prefer the **mDNS name**. A self-hosted server advertises itself on the LAN as
 `pulsync.local`, so the device finds it by name even when DHCP hands the server

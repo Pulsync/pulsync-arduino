@@ -119,7 +119,8 @@ void PulsyncClass::_schedTrampoline(void *arg) {
 PulsyncClass::PulsyncClass()
     : _begun(false), _wifi_count(0), _server_explicit(false), _payload_active(false),
       _payload_len(0), _cmd_handler_count(0), _reset_pin(0), _reset_press_start(0),
-      _hb_started(false), _disc_state(DISC_TRY_CLOUD), _disc_next_attempt(0),
+      _hb_started(false), _server_mode(AUTO),
+      _disc_state(DISC_TRY_LOCAL), _disc_next_attempt(0),
       _disc_no_server_logged(false) {
     memset(_server, 0, sizeof(_server));
     /* Hosted HTTP host. Device paths are "/api/device/..." so this yields
@@ -158,6 +159,14 @@ void PulsyncClass::setServer(const char *server) {
         strncpy(_server, server, sizeof(_server) - 1);
         _server[sizeof(_server) - 1] = '\0';
         _server_explicit = true;
+    }
+}
+
+void PulsyncClass::setServerMode(int mode) {
+    /* Hard override to a tier (no discovery, no fallback). setServer(url) still
+     * wins over this — precedence is resolved in begin(). */
+    if (mode == LOCAL || mode == CLOUD || mode == AUTO) {
+        _server_mode = mode;
     }
 }
 
@@ -255,10 +264,27 @@ void PulsyncClass::_initModules() {
             Serial.printf("[PULSYNC] Pairing code loaded from NVS: %s\n", _pairing_code);
         }
     }
-    /* Load server URL from NVS only if the user did NOT set one explicitly.
-     * An explicit setServer() in firmware always wins over a stale NVS value. */
-    bool server_provisioned = _server_explicit;  /* explicit or NVS = no discovery */
-    if (!_server_explicit) {
+    /* Resolve the server target by precedence:
+     *   1. setServer(url)          — explicit host, highest priority
+     *   2. setServerMode(LOCAL|CLOUD) — force a built-in tier (hard override)
+     *   3. NVS-provisioned server  — from the portal / previous run
+     *   4. AUTO (nothing set)      — discovery, local → cloud
+     * (1)–(3) all set server_provisioned = no discovery. */
+    bool server_provisioned = false;
+    if (_server_explicit) {
+        server_provisioned = true;
+        Serial.printf("[PULSYNC] Server set explicitly: %s\n", _server);
+    } else if (_server_mode == LOCAL) {
+        strncpy(_server, PULSYNC_LOCAL_SERVER, sizeof(_server) - 1);
+        _server[sizeof(_server) - 1] = '\0';
+        server_provisioned = true;
+        Serial.println("[PULSYNC] Server mode: LOCAL (" PULSYNC_LOCAL_SERVER ")");
+    } else if (_server_mode == CLOUD) {
+        strncpy(_server, PULSYNC_CLOUD_SERVER, sizeof(_server) - 1);
+        _server[sizeof(_server) - 1] = '\0';
+        server_provisioned = true;
+        Serial.println("[PULSYNC] Server mode: CLOUD (" PULSYNC_CLOUD_SERVER ")");
+    } else {
         char saved_server[128] = {0};
         if (pulsync_nvs_get_str(PULSYNC_NVS_KEY_SERVER, saved_server, sizeof(saved_server))) {
             if (saved_server[0] != '\0') {
@@ -267,8 +293,6 @@ void PulsyncClass::_initModules() {
                 Serial.printf("[PULSYNC] Server loaded from NVS: %s\n", _server);
             }
         }
-    } else {
-        Serial.printf("[PULSYNC] Server set explicitly: %s\n", _server);
     }
 
     pulsync_enroll_init(_pairing_code);
@@ -305,10 +329,10 @@ void PulsyncClass::_initModules() {
      *  - Already enrolled → stick to the server the token was issued by
      *    (token_srv), skip discovery (RESOLVED). If that host stops answering,
      *    loop() re-runs discovery + re-enrolls.
-     *  - Fresh device → discover cloud → local. */
+     *  - Fresh device → discover local → cloud. */
     if (server_provisioned) {
         _disc_state = DISC_OVERRIDE;
-        Serial.println("[PULSYNC] Server provisioned — auto-discovery disabled");
+        Serial.println("[PULSYNC] Server fixed — auto-discovery disabled");
     } else if (_already_enrolled) {
         char token_srv[128] = {0};
         if (pulsync_nvs_get_str(PULSYNC_NVS_KEY_TOKEN_SRV, token_srv, sizeof(token_srv)) &&
@@ -322,8 +346,8 @@ void PulsyncClass::_initModules() {
         }
         _disc_state = DISC_RESOLVED;
     } else {
-        _disc_state = DISC_TRY_CLOUD;
-        Serial.println("[PULSYNC] No server set — will discover (cloud → local)");
+        _disc_state = DISC_TRY_LOCAL;
+        Serial.println("[PULSYNC] No server set — will discover (local → cloud)");
     }
 
     /* 9. Heartbeat */
@@ -399,7 +423,7 @@ void PulsyncClass::loop() {
                         _hb_started = false;
                         pulsync_enroll_reset();   /* force re-enroll on the rediscovered server */
                         pulsync_nvs_erase_key(PULSYNC_NVS_KEY_TOKEN_SRV);
-                        _disc_state = DISC_TRY_CLOUD;
+                        _disc_state = DISC_TRY_LOCAL;
                     }
                 }
             }
@@ -478,31 +502,31 @@ void PulsyncClass::_runDiscovery() {
     uint32_t now = millis();
 
     switch (_disc_state) {
-        case DISC_TRY_CLOUD: {
-            Serial.println("[DISCOVERY] Trying cloud (" PULSYNC_CLOUD_SERVER ")...");
-            _applyServerCandidate(PULSYNC_CLOUD_SERVER);
-            pulsync_enroll_init(_pairing_code);  /* reset enroll state for this target */
-            if (_probeAndEnroll()) {
-                pulsync_nvs_set_str(PULSYNC_NVS_KEY_TOKEN_SRV, PULSYNC_CLOUD_SERVER);
-                Serial.println("[DISCOVERY] Cloud reachable — enrolled.");
-                _disc_state = DISC_RESOLVED;
-            } else {
-                Serial.println("[DISCOVERY] Cloud unavailable — trying local.");
-                _disc_state = DISC_TRY_LOCAL;
-            }
-            break;
-        }
-
         case DISC_TRY_LOCAL: {
             Serial.println("[DISCOVERY] Trying local (" PULSYNC_LOCAL_SERVER ")...");
             _applyServerCandidate(PULSYNC_LOCAL_SERVER);
-            pulsync_enroll_init(_pairing_code);
+            pulsync_enroll_init(_pairing_code);  /* reset enroll state for this target */
             if (_probeAndEnroll()) {
                 pulsync_nvs_set_str(PULSYNC_NVS_KEY_TOKEN_SRV, PULSYNC_LOCAL_SERVER);
                 Serial.println("[DISCOVERY] Local reachable — enrolled.");
                 _disc_state = DISC_RESOLVED;
             } else {
-                Serial.println("[DISCOVERY] Local unavailable.");
+                Serial.println("[DISCOVERY] Local unavailable — trying cloud.");
+                _disc_state = DISC_TRY_CLOUD;
+            }
+            break;
+        }
+
+        case DISC_TRY_CLOUD: {
+            Serial.println("[DISCOVERY] Trying cloud (" PULSYNC_CLOUD_SERVER ")...");
+            _applyServerCandidate(PULSYNC_CLOUD_SERVER);
+            pulsync_enroll_init(_pairing_code);
+            if (_probeAndEnroll()) {
+                pulsync_nvs_set_str(PULSYNC_NVS_KEY_TOKEN_SRV, PULSYNC_CLOUD_SERVER);
+                Serial.println("[DISCOVERY] Cloud reachable — enrolled.");
+                _disc_state = DISC_RESOLVED;
+            } else {
+                Serial.println("[DISCOVERY] Cloud unavailable.");
                 _disc_state = DISC_NO_SERVER;
                 _disc_no_server_logged = false;
                 _disc_next_attempt = now + PULSYNC_NO_SERVER_RETRY_MS;
@@ -513,14 +537,14 @@ void PulsyncClass::_runDiscovery() {
         case DISC_NO_SERVER: {
             if (!_disc_no_server_logged) {
                 Serial.println("========================================");
-                Serial.println("[PULSYNC] NO SERVER FOUND (tried cloud + local).");
+                Serial.println("[PULSYNC] NO SERVER FOUND (tried local + cloud).");
                 Serial.println("[PULSYNC] Device idle — cannot operate without a server.");
                 Serial.printf( "[PULSYNC] Retrying in %d s...\n", PULSYNC_NO_SERVER_RETRY_MS / 1000);
                 Serial.println("========================================");
                 _disc_no_server_logged = true;
             }
             if ((int32_t)(now - _disc_next_attempt) >= 0) {
-                _disc_state = DISC_TRY_CLOUD;  /* restart the cycle */
+                _disc_state = DISC_TRY_LOCAL;  /* restart the cycle (local first) */
             }
             break;
         }
@@ -1144,7 +1168,7 @@ void PulsyncClass::_handlePortalRepair(const char *pairing_code) {
      * OVERRIDE. Only reset to a fresh discovery cycle if we somehow have no
      * target resolved yet. */
     if (_disc_state != DISC_OVERRIDE && _disc_state != DISC_RESOLVED) {
-        _disc_state = DISC_TRY_CLOUD;
+        _disc_state = DISC_TRY_LOCAL;
     }
 
     /* Close the portal and reconnect WiFi; loop() will re-enroll with the new

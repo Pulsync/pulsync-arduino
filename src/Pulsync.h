@@ -72,11 +72,29 @@ public:
     void setWiFi(const char *ssid, const char *password = nullptr);
 
     /**
-     * Set server URL. Heuristic: IP → HTTP, domain → HTTPS.
-     * Optional — defaults to "pulsync.in" (hosted). Device paths are
-     * "/api/device/..." so enroll resolves to https://pulsync.in/api/device/enroll.
+     * Server selection mode (for setServerMode). Sentinel values chosen so a
+     * stray numeric can't be mistaken for a mode.
+     */
+    enum ServerMode { AUTO = -1, LOCAL = -2, CLOUD = -3 };
+
+    /**
+     * Set an explicit server URL (host or host:port). Heuristic: IP → HTTP,
+     * domain → HTTPS. HIGHEST precedence — overrides setServerMode() and
+     * auto-discovery. Call before begin().
+     *   Pulsync.setServer("pulsync.local:3456");   // self-hosted by name
+     *   Pulsync.setServer("192.168.1.50:3456");    // by IP
      */
     void setServer(const char *server);
+
+    /**
+     * Force which server tier the device connects to (hard override, no
+     * discovery / no fallback). Call before begin().
+     *   Pulsync.setServerMode(Pulsync.LOCAL);  // only pulsync.local (LAN)
+     *   Pulsync.setServerMode(Pulsync.CLOUD);  // only the hosted cloud
+     *   Pulsync.setServerMode(Pulsync.AUTO);   // default: discover local → cloud
+     * setServer(url) takes precedence over this if both are set.
+     */
+    void setServerMode(int mode);
 
     /**
      * Set the firmware version this build reports (e.g. "1.2.3" or
@@ -225,7 +243,8 @@ private:
     };
     StagedWiFi _staged_wifi[PULSYNC_WIFI_MAX_CREDS];
     char _server[128];
-    bool _server_explicit;  /* true if setServer() was called by user code */
+    bool _server_explicit;  /* true if setServer(url) was called by user code */
+    int _server_mode;       /* AUTO / LOCAL / CLOUD from setServerMode() */
     char _pairing_code[16];
     bool _payload_active;
     char _payload_buf[512];
