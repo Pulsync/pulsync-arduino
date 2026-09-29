@@ -210,7 +210,7 @@ public:
 
     /* ===== Status ===== */
 
-    /** Check if connected to server (any transport). */
+    /** Check if MQTT is connected to the server. */
     bool isConnected();
 
     /** Check if WiFi is connected. */
@@ -253,14 +253,16 @@ private:
     uint32_t _reset_press_start;
     bool _hb_started;  /* heartbeat started once transport first connected */
 
-    /* ----- Server discovery (cloud → local failover) -----
+    /* ----- Server discovery (local → cloud failover) -----
      * Runs only when the user gave no explicit server (setServer / NVS). Tries
-     * the cloud candidate first, then local (mDNS). The winning server host is
+     * the local candidate first, then cloud. The winning server host is
      * persisted so an enrolled device sticks to it and skips discovery. */
     enum DiscoveryState {
         DISC_OVERRIDE = 0,  /* explicit server set — no discovery */
-        DISC_TRY_CLOUD,
         DISC_TRY_LOCAL,
+        DISC_WAIT_LOCAL,
+        DISC_TRY_CLOUD,
+        DISC_WAIT_CLOUD,
         DISC_RESOLVED,
         DISC_NO_SERVER
     };
@@ -268,10 +270,14 @@ private:
     uint32_t _disc_next_attempt;   /* millis timestamp for next probe/retry */
     bool _disc_no_server_logged;   /* so we print the NO_SERVER banner once per cycle */
     void _applyServerCandidate(const char *host);  /* point transport at a host */
-    bool _probeAndEnroll();        /* attempt enroll against current target; true on success */
+    void _probeAndEnroll();        /* start async enroll against current target */
     void _runDiscovery();          /* state machine, called from loop() */
 
-    void _initModules();
+    /**
+     * Initialize library subsystems.
+     * @return false when a required subsystem (currently NVS) cannot start.
+     */
+    bool _initModules();
 
 public:
     /* These are called from C trampolines — must be accessible */

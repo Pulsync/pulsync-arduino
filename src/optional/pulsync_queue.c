@@ -4,8 +4,5 @@
 
 #include "pulsync_queue.h"
 
-#ifdef PULSYNC_USE_QUEUE
-
-// TODO: Implementation
-
-#endif // PULSYNC_USE_QUEUE
+/* Persistent queue is intentionally unavailable in the beta library. See the
+ * public header for the compile-time diagnostic when PULSYNC_USE_QUEUE is set. */

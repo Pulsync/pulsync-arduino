@@ -2,7 +2,7 @@
  * Pulsync — Receive Commands Example
  *
  * Demonstrates receiving commands from the server.
- * Commands can arrive via WebSocket or heartbeat response.
+ * Commands arrive over MQTT (heartbeat reply or command topic).
  */
 
 #include <Pulsync.h>

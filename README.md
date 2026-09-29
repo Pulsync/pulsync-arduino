@@ -6,7 +6,7 @@ Non-blocking task scheduler + real-time cloud sync for ESP32.
 
 - **Scheduler** — `setTimeout`, `setInterval`, `when`, `every` (non-blocking)
 - **WiFi Manager** — auto-connect, 3 profiles, captive portal
-- **Cloud Transport** — WSS / MQTTS / HTTPS with automatic fallback
+- **Cloud Transport** — MQTT for the live link (data, heartbeat, config, commands); HTTP(S) for enrollment and OTA. No transport fallback.
 - **OTA Updates** — server-triggered firmware updates with rollback
 - **Remote Config** — push configuration from server to device
 - **Device Enrollment** — pairing code based, automatic token management

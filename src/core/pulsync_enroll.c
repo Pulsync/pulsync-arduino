@@ -12,8 +12,11 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "pulsync_enroll";
 
@@ -21,8 +24,16 @@ static const char *TAG = "pulsync_enroll";
 
 static char s_pairing_code[PULSYNC_PAIRING_CODE_MAXLEN] = {0};
 static char s_device_token[PULSYNC_TOKEN_MAXLEN] = {0};
-static pulsync_enroll_state_t s_state = PULSYNC_ENROLL_IDLE;
+static volatile pulsync_enroll_state_t s_state = PULSYNC_ENROLL_IDLE;
 static pulsync_enroll_cb_t s_cb = NULL;
+static TaskHandle_t s_task = NULL;
+static volatile uint32_t s_attempt_id = 0;
+
+typedef struct {
+    char pairing_code[PULSYNC_PAIRING_CODE_MAXLEN];
+    uint32_t attempt_id;
+    int timeout_ms;
+} enroll_attempt_t;
 
 /* ---------- Simple JSON parsing (no external deps) ---------- */
 
@@ -73,6 +84,9 @@ static size_t json_extract_string(const char *json, size_t json_len,
 /* ---------- Public API ---------- */
 
 void pulsync_enroll_init(const char *pairing_code) {
+    /* Invalidate a stale in-flight request before changing its inputs. The
+     * task will discard its response; a fresh attempt starts after it exits. */
+    s_attempt_id++;
     if (pairing_code) {
         strncpy(s_pairing_code, pairing_code, PULSYNC_PAIRING_CODE_MAXLEN - 1);
         s_pairing_code[PULSYNC_PAIRING_CODE_MAXLEN - 1] = '\0';
@@ -99,16 +113,12 @@ bool pulsync_enroll_check(void) {
     return false;
 }
 
-void pulsync_enroll_start(void) {
-    if (s_state == PULSYNC_ENROLL_DONE) {
-        ESP_LOGI(TAG, "Already enrolled, skipping");
-        return;
-    }
-
-    if (s_pairing_code[0] == '\0') {
-        ESP_LOGE(TAG, "No pairing code set");
+static void enroll_task(void *arg) {
+    enroll_attempt_t *attempt = (enroll_attempt_t *)arg;
+    if (!attempt) {
         s_state = PULSYNC_ENROLL_FAILED;
-        if (s_cb) s_cb(false, NULL);
+        s_task = NULL;
+        vTaskDelete(NULL);
         return;
     }
 
@@ -129,31 +139,87 @@ void pulsync_enroll_start(void) {
     if (dev_name[0] != '\0') {
         len = snprintf(payload, sizeof(payload),
                        "{\"pairing_code\":\"%s\",\"fw_version\":\"%s\",\"mac_address\":\"%s\",\"device_name\":\"%s\"}",
-                       s_pairing_code,
+                       attempt->pairing_code,
                        pulsync_version_get(),
                        mac_str, dev_name);
     } else {
         len = snprintf(payload, sizeof(payload),
                        "{\"pairing_code\":\"%s\",\"fw_version\":\"%s\",\"mac_address\":\"%s\"}",
-                       s_pairing_code,
+                       attempt->pairing_code,
                        pulsync_version_get(),
                        mac_str);
     }
 
-    ESP_LOGI(TAG, "Enrolling: code=%s mac=%s", s_pairing_code, mac_str);
-    s_state = PULSYNC_ENROLL_IN_PROGRESS;
-
-    /* Send enrollment via HTTP POST */
+    ESP_LOGI(TAG, "Enrolling: code=%s mac=%s", attempt->pairing_code, mac_str);
     char response[256] = {0};
-    if (!pulsync_transport_http_post("/api/device/enroll", payload, (size_t)len, response, sizeof(response))) {
-        ESP_LOGE(TAG, "Enrollment HTTP request failed");
+    pulsync_transport_set_http_timeout(attempt->timeout_ms);
+    bool ok = pulsync_transport_http_post("/api/device/enroll", payload,
+                                          (size_t)len, response, sizeof(response));
+    pulsync_transport_set_http_timeout(10000);
+
+    /* A re-pair/reset can invalidate this request while HTTP is in flight.
+     * Never let its old response overwrite the newer enrollment state. */
+    if (attempt->attempt_id == s_attempt_id) {
+        if (!ok) {
+            ESP_LOGE(TAG, "Enrollment HTTP request failed");
+            s_state = PULSYNC_ENROLL_FAILED;
+            if (s_cb) s_cb(false, NULL);
+        } else {
+            pulsync_enroll_handle_response(response, strlen(response));
+        }
+    } else {
+        ESP_LOGW(TAG, "Discarded stale enrollment response");
+    }
+
+    free(attempt);
+    s_task = NULL;
+    vTaskDelete(NULL);
+}
+
+void pulsync_enroll_start_with_timeout(int timeout_ms) {
+    if (s_state == PULSYNC_ENROLL_DONE) {
+        ESP_LOGI(TAG, "Already enrolled, skipping");
+        return;
+    }
+
+    if (s_task || s_state == PULSYNC_ENROLL_IN_PROGRESS) {
+        ESP_LOGD(TAG, "Enrollment already in progress");
+        return;
+    }
+
+    if (s_pairing_code[0] == '\0') {
+        ESP_LOGE(TAG, "No pairing code set");
         s_state = PULSYNC_ENROLL_FAILED;
         if (s_cb) s_cb(false, NULL);
         return;
     }
 
-    /* Process response directly */
-    pulsync_enroll_handle_response(response, strlen(response));
+    if (timeout_ms < 500) timeout_ms = 500;
+    enroll_attempt_t *attempt = (enroll_attempt_t *)calloc(1, sizeof(*attempt));
+    if (!attempt) {
+        ESP_LOGE(TAG, "No memory for enrollment task");
+        s_state = PULSYNC_ENROLL_FAILED;
+        if (s_cb) s_cb(false, NULL);
+        return;
+    }
+    strncpy(attempt->pairing_code, s_pairing_code, sizeof(attempt->pairing_code) - 1);
+    attempt->attempt_id = s_attempt_id;
+    attempt->timeout_ms = timeout_ms;
+    s_state = PULSYNC_ENROLL_IN_PROGRESS;
+
+    BaseType_t created = xTaskCreate(enroll_task, "pulsync_enroll", 6144,
+                                     attempt, 4, &s_task);
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create enrollment task");
+        free(attempt);
+        s_task = NULL;
+        s_state = PULSYNC_ENROLL_FAILED;
+        if (s_cb) s_cb(false, NULL);
+    }
+}
+
+void pulsync_enroll_start(void) {
+    pulsync_enroll_start_with_timeout(10000);
 }
 
 void pulsync_enroll_handle_response(const char *payload, size_t len) {
@@ -240,6 +306,7 @@ void pulsync_enroll_on_complete(pulsync_enroll_cb_t cb) {
 
 void pulsync_enroll_reset(void) {
     ESP_LOGW(TAG, "Resetting enrollment (erasing token)");
+    s_attempt_id++;
     pulsync_nvs_erase_key(PULSYNC_NVS_KEY_TOKEN);
     s_device_token[0] = '\0';
     s_state = PULSYNC_ENROLL_NEEDED;

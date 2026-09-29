@@ -1,7 +1,7 @@
 /**
  * pulsync_config — Remote config store (C API)
  *
- * Generic key-value config pushed from server via heartbeat or WSS.
+ * Generic key-value config pushed from server via MQTT heartbeat.
  * Values are stored in NVS for persistence across reboots.
  * User registers callbacks for specific keys — fired on change.
  *
@@ -109,7 +109,7 @@ bool pulsync_config_get_bool(const char *key, bool default_val);
 bool pulsync_config_get_string(const char *key, char *out, size_t maxlen, const char *default_val);
 
 /**
- * Handle config push from server (called from heartbeat/WSS handler).
+ * Handle config push from server (called from the MQTT heartbeat handler).
  * Parses JSON config object, updates values, fires callbacks.
  * @param json      JSON string containing config key-value pairs
  * @param json_len  Length of JSON string

@@ -1,8 +1,9 @@
 /**
  * pulsync_queue — Offline persistent queue (C API)
  *
- * Optional module. Enable with: #define PULSYNC_USE_QUEUE
- * SPIFFS/LittleFS backed. Survives reboots. Flushes when online.
+ * Reserved for a future release. Persistent SPIFFS/LittleFS queuing is not
+ * available in the beta library. The built-in transport queue remains an
+ * in-RAM, reconnect-only buffer.
  */
 
 #pragma once
@@ -11,7 +12,9 @@
 extern "C" {
 #endif
 
-// TODO: C API declarations
+#ifdef PULSYNC_USE_QUEUE
+#error "PULSYNC_USE_QUEUE is not implemented; remove this flag for the beta library"
+#endif
 
 #ifdef __cplusplus
 }

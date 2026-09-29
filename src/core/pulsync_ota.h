@@ -1,11 +1,11 @@
 /**
  * pulsync_ota — OTA firmware update manager (C API)
  *
- * Triggered by server via heartbeat response or WSS push.
+ * Triggered by server via MQTT heartbeat response.
  * Uses ESP-IDF OTA APIs (esp_ota_ops, esp_https_ota) with rollback support.
  *
  * Flow:
- *   1. Server signals OTA available (URL + version in heartbeat or WSS message)
+ *   1. Server signals OTA available (URL + version in the MQTT heartbeat reply)
  *   2. Library compares version to current PULSYNC_FW_VERSION
  *   3. If newer, downloads firmware from URL
  *   4. Writes to next OTA partition
@@ -78,7 +78,7 @@ bool pulsync_ota_should_update(const char *version);
 bool pulsync_ota_start(const pulsync_ota_info_t *info);
 
 /**
- * Handle OTA trigger from heartbeat or WSS message.
+ * Handle OTA trigger from the MQTT heartbeat reply.
  * Parses the JSON "ota" object and starts update if applicable.
  * @param json      JSON payload containing OTA info
  * @param json_len  Payload length

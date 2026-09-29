@@ -111,15 +111,22 @@ static bool ota_hex_equal_ct(const char *a, const char *b) {
     return diff == 0;
 }
 
-/* Cert bundle attach symbol — see pulsync_transport.c for the rationale.
- * arduino-esp32 2.x (IDF 4.x) only has arduino_esp_crt_bundle_attach; from
- * arduino-esp32 3.x (IDF 5.x) the standard esp_crt_bundle_attach is used. */
+/* Cert bundle attach — see pulsync_transport.c (Arduino 2.x must seed first). */
 #if defined(ARDUINO) && ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
 esp_err_t arduino_esp_crt_bundle_attach(void *conf);
+void arduino_esp_crt_bundle_set(const uint8_t *x509_bundle);
+extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 #define PULSYNC_CRT_BUNDLE_ATTACH arduino_esp_crt_bundle_attach
+static void pulsync_ota_seed_crt_bundle(void) {
+    static bool seeded = false;
+    if (seeded) return;
+    arduino_esp_crt_bundle_set(x509_crt_bundle_start);
+    seeded = true;
+}
 #else
 #include "esp_crt_bundle.h"
 #define PULSYNC_CRT_BUNDLE_ATTACH esp_crt_bundle_attach
+static void pulsync_ota_seed_crt_bundle(void) {}
 #endif
 
 static const char *TAG = "pulsync_ota";
@@ -369,6 +376,9 @@ static void ota_download_task(void *param) {
 
     /* Determine if URL uses TLS */
     bool use_tls = (strncmp(s_pending_info.url, "https://", 8) == 0);
+    if (use_tls) {
+        pulsync_ota_seed_crt_bundle();
+    }
 
     esp_http_client_config_t http_cfg = {
         .url = s_pending_info.url,

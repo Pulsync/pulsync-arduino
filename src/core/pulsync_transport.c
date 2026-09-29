@@ -28,13 +28,31 @@
  * arduino-esp32 3.x (ESP-IDF 5.x) the standard IDF `esp_crt_bundle_attach`
  * is available and the Arduino-specific symbol is gone. Native ESP-IDF
  * always has the standard symbol. Pick accordingly so the library links on
- * every combination. */
+ * every combination.
+ *
+ * Arduino 2.x gotcha: `arduino_esp_crt_bundle_attach` does NOT auto-load the
+ * IDF-embedded CA blob (despite the comment in WiFiClientSecure). It only
+ * works after `arduino_esp_crt_bundle_set(...)` — which WiFiClientSecure
+ * does via setCACertBundle(), but esp_http_client / esp_mqtt never do.
+ * Without seeding we get "Failed to attach bundle" then handshake -0x7680.
+ * Seed once from the SDK's `_binary_x509_crt_bundle_start` (pulls the blob
+ * into the link). */
 #if defined(ARDUINO) && ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
 esp_err_t arduino_esp_crt_bundle_attach(void *conf);
+void arduino_esp_crt_bundle_set(const uint8_t *x509_bundle);
+extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 #define PULSYNC_CRT_BUNDLE_ATTACH arduino_esp_crt_bundle_attach
+
+static void pulsync_seed_crt_bundle(void) {
+    static bool seeded = false;
+    if (seeded) return;
+    arduino_esp_crt_bundle_set(x509_crt_bundle_start);
+    seeded = true;
+}
 #else
 #include "esp_crt_bundle.h"
 #define PULSYNC_CRT_BUNDLE_ATTACH esp_crt_bundle_attach
+static void pulsync_seed_crt_bundle(void) {}
 #endif
 
 static const char *TAG = "pulsync_transport";
@@ -291,6 +309,10 @@ bool pulsync_transport_init(const pulsync_transport_config_t *config) {
             s_mdns_label[label_len] = '\0';
             ESP_LOGI(TAG, "Server host is mDNS name '%s.local' — will resolve via mDNS", s_mdns_label);
         }
+    }
+
+    if (s_config.use_tls) {
+        pulsync_seed_crt_bundle();
     }
 
     ESP_LOGI(TAG, "Init: %s:%u (MQTT:%u, TLS:%s)",

@@ -1,8 +1,8 @@
 /**
  * pulsync_time — Time service (C API)
  *
- * Optional module. Enable with: #define PULSYNC_USE_TIME
- * NTP sync + server-time fallback via heartbeat.
+ * Reserved for a future release. NTP and server-time fallback are not
+ * available in the beta library.
  */
 
 #pragma once
@@ -11,7 +11,9 @@
 extern "C" {
 #endif
 
-// TODO: C API declarations
+#ifdef PULSYNC_USE_TIME
+#error "PULSYNC_USE_TIME is not implemented; remove this flag for the beta library"
+#endif
 
 #ifdef __cplusplus
 }

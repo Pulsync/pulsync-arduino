@@ -185,12 +185,17 @@ bool PulsyncClass::begin(const char *pairing_code) {
         strncpy(_pairing_code, pairing_code, sizeof(_pairing_code) - 1);
     }
 
-    _initModules();
+    if (!_initModules()) {
+        /* Do not mark the singleton as begun after a required subsystem
+         * failed. This lets the sketch surface the error or retry after the
+         * underlying NVS/partition problem is fixed. */
+        return false;
+    }
     _begun = true;
     return true;
 }
 
-void PulsyncClass::_initModules() {
+bool PulsyncClass::_initModules() {
     /* Report the effective firmware version up front. It's already resolved
      * (runtime override via setVersion() > PULSYNC_FW_VERSION > "0.0.0"). */
     const char *fw = pulsync_version_get();
@@ -207,7 +212,7 @@ void PulsyncClass::_initModules() {
     /* 2. NVS */
     if (!pulsync_nvs_init()) {
         Serial.println("[Pulsync] ERROR: NVS init failed");
-        return;
+        return false;
     }
 
     /* 3. WiFi */
@@ -363,6 +368,7 @@ void PulsyncClass::_initModules() {
     }
 
     /* 11. Transport + heartbeat started from loop() after enrollment */
+    return true;
 }
 
 void PulsyncClass::loop() {
@@ -382,13 +388,14 @@ void PulsyncClass::loop() {
         bool ready = (_disc_state == DISC_OVERRIDE || _disc_state == DISC_RESOLVED);
 
         if (ready) {
-            /* Enrollment via HTTP (blocking, runs once) */
+            /* Enrollment HTTP runs in its own task. loop() only starts it and
+             * observes its state on later passes. */
             if (pulsync_enroll_get_state() != PULSYNC_ENROLL_DONE &&
                 pulsync_enroll_get_state() != PULSYNC_ENROLL_IN_PROGRESS &&
                 pulsync_enroll_get_state() != PULSYNC_ENROLL_FAILED) {
                 if (!pulsync_enroll_check()) {
                     Serial.println("[PULSYNC] Enrolling via HTTP...");
-                    pulsync_enroll_start();  /* blocking HTTP POST */
+                    pulsync_enroll_start();
                 }
             }
 
@@ -470,7 +477,7 @@ void PulsyncClass::loop() {
     }
 }
 
-/* ---------- Server discovery (cloud → local failover) ---------- */
+/* ---------- Server discovery (local → cloud failover) ---------- */
 
 void PulsyncClass::_applyServerCandidate(const char *host) {
     if (!host || host[0] == '\0') return;
@@ -485,14 +492,10 @@ void PulsyncClass::_applyServerCandidate(const char *host) {
     pulsync_transport_set_mqtt_url(NULL);  /* re-derive until enroll provides one */
 }
 
-bool PulsyncClass::_probeAndEnroll() {
-    /* Use a short HTTP timeout so a dead candidate fails fast during discovery. */
-    pulsync_transport_set_http_timeout(PULSYNC_DISCOVERY_TIMEOUT_MS);
-    pulsync_enroll_start();  /* blocking HTTP POST against the current target */
-    bool ok = (pulsync_enroll_get_state() == PULSYNC_ENROLL_DONE);
-    /* Restore a normal timeout for regular operation. */
-    pulsync_transport_set_http_timeout(10000);
-    return ok;
+void PulsyncClass::_probeAndEnroll() {
+    /* The request itself is asynchronous. Discovery wait states decide whether
+     * this candidate won after the enrollment task finishes. */
+    pulsync_enroll_start_with_timeout(PULSYNC_DISCOVERY_TIMEOUT_MS);
 }
 
 void PulsyncClass::_runDiscovery() {
@@ -506,7 +509,18 @@ void PulsyncClass::_runDiscovery() {
             Serial.println("[DISCOVERY] Trying local (" PULSYNC_LOCAL_SERVER ")...");
             _applyServerCandidate(PULSYNC_LOCAL_SERVER);
             pulsync_enroll_init(_pairing_code);  /* reset enroll state for this target */
-            if (_probeAndEnroll()) {
+            _probeAndEnroll();
+            _disc_state = DISC_WAIT_LOCAL;
+            break;
+        }
+
+        case DISC_WAIT_LOCAL: {
+            pulsync_enroll_state_t state = pulsync_enroll_get_state();
+            if (state == PULSYNC_ENROLL_IN_PROGRESS || state == PULSYNC_ENROLL_IDLE ||
+                state == PULSYNC_ENROLL_NEEDED) {
+                break;
+            }
+            if (state == PULSYNC_ENROLL_DONE) {
                 pulsync_nvs_set_str(PULSYNC_NVS_KEY_TOKEN_SRV, PULSYNC_LOCAL_SERVER);
                 Serial.println("[DISCOVERY] Local reachable — enrolled.");
                 _disc_state = DISC_RESOLVED;
@@ -521,7 +535,18 @@ void PulsyncClass::_runDiscovery() {
             Serial.println("[DISCOVERY] Trying cloud (" PULSYNC_CLOUD_SERVER ")...");
             _applyServerCandidate(PULSYNC_CLOUD_SERVER);
             pulsync_enroll_init(_pairing_code);
-            if (_probeAndEnroll()) {
+            _probeAndEnroll();
+            _disc_state = DISC_WAIT_CLOUD;
+            break;
+        }
+
+        case DISC_WAIT_CLOUD: {
+            pulsync_enroll_state_t state = pulsync_enroll_get_state();
+            if (state == PULSYNC_ENROLL_IN_PROGRESS || state == PULSYNC_ENROLL_IDLE ||
+                state == PULSYNC_ENROLL_NEEDED) {
+                break;
+            }
+            if (state == PULSYNC_ENROLL_DONE) {
                 pulsync_nvs_set_str(PULSYNC_NVS_KEY_TOKEN_SRV, PULSYNC_CLOUD_SERVER);
                 Serial.println("[DISCOVERY] Cloud reachable — enrolled.");
                 _disc_state = DISC_RESOLVED;

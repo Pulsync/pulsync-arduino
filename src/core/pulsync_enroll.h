@@ -49,10 +49,16 @@ bool pulsync_enroll_check(void);
 
 /**
  * Start the enrollment process (sends pairing code to server).
- * Non-blocking — uses transport layer.
- * Result arrives via the on_complete callback or the transport rx handler.
+ * Non-blocking — HTTP runs in a short-lived FreeRTOS task. Result arrives via
+ * the on_complete callback after the task finishes.
  */
 void pulsync_enroll_start(void);
+
+/**
+ * Start enrollment with a request timeout. Intended for server discovery,
+ * where an unreachable candidate must fail quickly. Non-blocking.
+ */
+void pulsync_enroll_start_with_timeout(int timeout_ms);
 
 /**
  * Process enrollment response from server.
