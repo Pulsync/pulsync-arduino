@@ -125,6 +125,14 @@ static void get_token(char *buf, size_t len) {
     if (s_mutex) xSemaphoreGive(s_mutex);
 }
 
+/** MQTT topic routing key (device UUID). Empty until enrollment stores it. */
+static void get_device_id(char *buf, size_t len) {
+    if (s_mutex) xSemaphoreTake(s_mutex, portMAX_DELAY);
+    strncpy(buf, s_config.device_id, len - 1);
+    buf[len - 1] = '\0';
+    if (s_mutex) xSemaphoreGive(s_mutex);
+}
+
 /* ---------- Offline queue ---------- */
 
 static void queue_message(const char *subtopic, const char *payload, size_t len) {
@@ -147,16 +155,16 @@ static int queue_depth(void) {
 }
 
 static void flush_queue(void) {
-    char token[PULSYNC_TOKEN_MAXLEN];
-    get_token(token, sizeof(token));
-    if (token[0] == '\0') return;
+    char device_id[PULSYNC_DEVICE_ID_MAXLEN];
+    get_device_id(device_id, sizeof(device_id));
+    if (device_id[0] == '\0') return;
 
     int sent = 0;
     for (int i = 0; i < PULSYNC_OFFLINE_QUEUE_SIZE; i++) {
         if (!s_queue[i].in_use) continue;
 
         char topic[160];
-        snprintf(topic, sizeof(topic), "pulsync/%s/upload/%s", token, s_queue[i].topic);
+        snprintf(topic, sizeof(topic), "pulsync/%s/upload/%s", device_id, s_queue[i].topic);
         int msg_id = esp_mqtt_client_publish(s_mqtt, topic, s_queue[i].payload, s_queue[i].len, 1, 0);
         if (msg_id >= 0) {
             s_queue[i].in_use = false;
@@ -178,12 +186,12 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t event_
             ESP_LOGI(TAG, "MQTT connected");
             set_state(PULSYNC_TRANSPORT_CONNECTED);
 
-            /* Subscribe to download topics */
-            char token[PULSYNC_TOKEN_MAXLEN];
-            get_token(token, sizeof(token));
-            if (token[0] != '\0') {
+            /* Subscribe to download topics (keyed by device UUID, not token) */
+            char device_id[PULSYNC_DEVICE_ID_MAXLEN];
+            get_device_id(device_id, sizeof(device_id));
+            if (device_id[0] != '\0') {
                 char topic[160];
-                snprintf(topic, sizeof(topic), "pulsync/%s/download/+", token);
+                snprintf(topic, sizeof(topic), "pulsync/%s/download/+", device_id);
                 esp_mqtt_client_subscribe(s_mqtt, topic, 1);
                 ESP_LOGI(TAG, "Subscribed: %s", topic);
             }
@@ -495,15 +503,15 @@ bool pulsync_transport_publish(const char *subtopic, const char *payload, size_t
         return true;  /* queued successfully */
     }
 
-    char token[PULSYNC_TOKEN_MAXLEN];
-    get_token(token, sizeof(token));
-    if (token[0] == '\0') {
+    char device_id[PULSYNC_DEVICE_ID_MAXLEN];
+    get_device_id(device_id, sizeof(device_id));
+    if (device_id[0] == '\0') {
         queue_message(subtopic, payload, len);
         return true;
     }
 
     char topic[160];
-    snprintf(topic, sizeof(topic), "pulsync/%s/upload/%s", token, subtopic);
+    snprintf(topic, sizeof(topic), "pulsync/%s/upload/%s", device_id, subtopic);
 
     int msg_id = esp_mqtt_client_publish(s_mqtt, topic, payload, (int)len, 1, 0);
     if (msg_id < 0) {
@@ -619,6 +627,14 @@ void pulsync_transport_set_token(const char *token) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     strncpy(s_config.device_token, token, PULSYNC_TOKEN_MAXLEN - 1);
     s_config.device_token[PULSYNC_TOKEN_MAXLEN - 1] = '\0';
+    xSemaphoreGive(s_mutex);
+}
+
+void pulsync_transport_set_device_id(const char *device_id) {
+    if (!device_id || !s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    strncpy(s_config.device_id, device_id, PULSYNC_DEVICE_ID_MAXLEN - 1);
+    s_config.device_id[PULSYNC_DEVICE_ID_MAXLEN - 1] = '\0';
     xSemaphoreGive(s_mutex);
 }
 

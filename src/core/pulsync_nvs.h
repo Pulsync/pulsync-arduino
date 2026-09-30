@@ -19,6 +19,7 @@ extern "C" {
 /** NVS keys used by the library */
 #define PULSYNC_NVS_NAMESPACE    "pulsync"
 #define PULSYNC_NVS_KEY_TOKEN    "dev_token"
+#define PULSYNC_NVS_KEY_DEVICE_ID "device_id"  /* UUID used in MQTT topics (not the token) */
 #define PULSYNC_NVS_KEY_SERVER   "server_url"
 #define PULSYNC_NVS_KEY_MQTT_URL "mqtt_url"   /* server-provided broker endpoint */
 #define PULSYNC_NVS_KEY_TOKEN_SRV "token_srv" /* HTTP host the token was issued by */

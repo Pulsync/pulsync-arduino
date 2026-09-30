@@ -31,6 +31,7 @@ extern "C" {
 
 #define PULSYNC_SERVER_URL_MAXLEN  128
 #define PULSYNC_TOKEN_MAXLEN      128
+#define PULSYNC_DEVICE_ID_MAXLEN   40   /* UUID string for MQTT topic routing */
 #define PULSYNC_OFFLINE_QUEUE_SIZE 20   /* messages buffered when MQTT is down */
 
 /** Transport state */
@@ -45,7 +46,8 @@ typedef struct {
     char server_host[64];         /* e.g., "10.212.89.160" or "api.pulsync.in" */
     uint16_t http_port;           /* HTTP port (default 3456 local, 443 hosted) */
     uint16_t mqtt_port;           /* MQTT port (default 1883 local, 8883 hosted) */
-    char device_token[PULSYNC_TOKEN_MAXLEN];
+    char device_token[PULSYNC_TOKEN_MAXLEN]; /* MQTT password only (not in topics) */
+    char device_id[PULSYNC_DEVICE_ID_MAXLEN]; /* MQTT topic key: pulsync/{device_id}/… */
     bool use_tls;                 /* TLS for both MQTT and HTTP */
 } pulsync_transport_config_t;
 
@@ -146,6 +148,9 @@ void pulsync_transport_on_state_change(pulsync_transport_state_cb_t cb);
  * Update device token (after enrollment or rotation).
  */
 void pulsync_transport_set_token(const char *token);
+
+/** Set device UUID used in MQTT topics (`pulsync/{device_id}/…`). */
+void pulsync_transport_set_device_id(const char *device_id);
 
 /**
  * Update server configuration (HTTP target). MQTT target defaults to the same

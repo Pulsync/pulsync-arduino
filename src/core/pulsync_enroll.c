@@ -2,7 +2,8 @@
  * pulsync_enroll — Device enrollment implementation
  *
  * Uses transport layer to POST pairing code to /api/device/enroll.
- * Parses JSON response for token. Stores token in NVS.
+ * Parses JSON response for token + device_id. Stores both in NVS.
+ * Token = MQTT password; device_id = MQTT topic key (M2+).
  */
 
 #include "pulsync_enroll.h"
@@ -24,6 +25,7 @@ static const char *TAG = "pulsync_enroll";
 
 static char s_pairing_code[PULSYNC_PAIRING_CODE_MAXLEN] = {0};
 static char s_device_token[PULSYNC_TOKEN_MAXLEN] = {0};
+static char s_device_id[PULSYNC_DEVICE_ID_MAXLEN] = {0};
 static volatile pulsync_enroll_state_t s_state = PULSYNC_ENROLL_IDLE;
 static pulsync_enroll_cb_t s_cb = NULL;
 static TaskHandle_t s_task = NULL;
@@ -93,22 +95,31 @@ void pulsync_enroll_init(const char *pairing_code) {
     }
     s_state = PULSYNC_ENROLL_IDLE;
     s_device_token[0] = '\0';
+    s_device_id[0] = '\0';
 }
 
 bool pulsync_enroll_check(void) {
-    /* Try to load token from NVS */
-    if (pulsync_nvs_get_str(PULSYNC_NVS_KEY_TOKEN, s_device_token, PULSYNC_TOKEN_MAXLEN)) {
-        if (s_device_token[0] != '\0') {
-            ESP_LOGI(TAG, "Device already enrolled (token in NVS)");
-            s_state = PULSYNC_ENROLL_DONE;
+    /* Need both token (MQTT password) and device_id (topic key). Pre-M2
+     * devices may only have the token — re-run enroll to fetch device_id. */
+    bool have_token = pulsync_nvs_get_str(PULSYNC_NVS_KEY_TOKEN, s_device_token, PULSYNC_TOKEN_MAXLEN)
+                      && s_device_token[0] != '\0';
+    bool have_id = pulsync_nvs_get_str(PULSYNC_NVS_KEY_DEVICE_ID, s_device_id, PULSYNC_DEVICE_ID_MAXLEN)
+                   && s_device_id[0] != '\0';
 
-            /* Push token to transport layer */
-            pulsync_transport_set_token(s_device_token);
-            return true;
-        }
+    if (have_token && have_id) {
+        ESP_LOGI(TAG, "Device already enrolled (token + device_id in NVS)");
+        s_state = PULSYNC_ENROLL_DONE;
+        pulsync_transport_set_token(s_device_token);
+        pulsync_transport_set_device_id(s_device_id);
+        return true;
     }
 
-    ESP_LOGI(TAG, "No token in NVS — enrollment needed");
+    if (have_token && !have_id) {
+        ESP_LOGW(TAG, "Token in NVS but no device_id — re-enroll to fetch UUID (M2 topics)");
+        pulsync_transport_set_token(s_device_token);
+    } else {
+        ESP_LOGI(TAG, "No token in NVS — enrollment needed");
+    }
     s_state = PULSYNC_ENROLL_NEEDED;
     return false;
 }
@@ -151,7 +162,7 @@ static void enroll_task(void *arg) {
     }
 
     ESP_LOGI(TAG, "Enrolling: code=%s mac=%s", attempt->pairing_code, mac_str);
-    char response[256] = {0};
+    char response[512] = {0};
     pulsync_transport_set_http_timeout(attempt->timeout_ms);
     bool ok = pulsync_transport_http_post("/api/device/enroll", payload,
                                           (size_t)len, response, sizeof(response));
@@ -239,7 +250,7 @@ void pulsync_enroll_handle_response(const char *payload, size_t len) {
         return;
     }
 
-    /* Extract token */
+    /* Extract token (MQTT password) + device_id (MQTT topic key) */
     char token[PULSYNC_TOKEN_MAXLEN] = {0};
     if (json_extract_string(payload, len, "token", token, sizeof(token)) == 0) {
         ESP_LOGE(TAG, "No token in enrollment response");
@@ -248,9 +259,18 @@ void pulsync_enroll_handle_response(const char *payload, size_t len) {
         return;
     }
 
-    /* Store token in NVS */
-    if (!pulsync_nvs_set_str(PULSYNC_NVS_KEY_TOKEN, token)) {
-        ESP_LOGE(TAG, "Failed to store token in NVS");
+    char device_id[PULSYNC_DEVICE_ID_MAXLEN] = {0};
+    if (json_extract_string(payload, len, "device_id", device_id, sizeof(device_id)) == 0) {
+        ESP_LOGE(TAG, "No device_id in enrollment response (server must be M2+)");
+        s_state = PULSYNC_ENROLL_FAILED;
+        if (s_cb) s_cb(false, NULL);
+        return;
+    }
+
+    /* Store token + device_id in NVS */
+    if (!pulsync_nvs_set_str(PULSYNC_NVS_KEY_TOKEN, token)
+        || !pulsync_nvs_set_str(PULSYNC_NVS_KEY_DEVICE_ID, device_id)) {
+        ESP_LOGE(TAG, "Failed to store enrollment credentials in NVS");
         s_state = PULSYNC_ENROLL_FAILED;
         if (s_cb) s_cb(false, NULL);
         return;
@@ -258,7 +278,9 @@ void pulsync_enroll_handle_response(const char *payload, size_t len) {
 
     /* Update local state and transport */
     strncpy(s_device_token, token, PULSYNC_TOKEN_MAXLEN - 1);
+    strncpy(s_device_id, device_id, PULSYNC_DEVICE_ID_MAXLEN - 1);
     pulsync_transport_set_token(token);
+    pulsync_transport_set_device_id(device_id);
 
     /* The server may hand back the MQTT broker endpoint so the device connects
      * to the right place instead of deriving it from the HTTP host. Persist it
@@ -305,9 +327,11 @@ void pulsync_enroll_on_complete(pulsync_enroll_cb_t cb) {
 }
 
 void pulsync_enroll_reset(void) {
-    ESP_LOGW(TAG, "Resetting enrollment (erasing token)");
+    ESP_LOGW(TAG, "Resetting enrollment (erasing token + device_id)");
     s_attempt_id++;
     pulsync_nvs_erase_key(PULSYNC_NVS_KEY_TOKEN);
+    pulsync_nvs_erase_key(PULSYNC_NVS_KEY_DEVICE_ID);
     s_device_token[0] = '\0';
+    s_device_id[0] = '\0';
     s_state = PULSYNC_ENROLL_NEEDED;
 }
