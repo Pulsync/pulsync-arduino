@@ -313,9 +313,24 @@ bool PulsyncClass::_initModules() {
     pulsync_transport_parse_url(_server, tcfg.server_host, sizeof(tcfg.server_host),
                                 &tcfg.http_port, &tcfg.mqtt_port, &tcfg.use_tls);
     strncpy(tcfg.device_token, _loaded_token, PULSYNC_TOKEN_MAXLEN - 1);
+    /* enroll_check() may call set_device_id before transport_init — that is a
+     * no-op (mutex not created yet) and init would overwrite s_config anyway.
+     * Copy NVS device_id into tcfg so reboot keeps MQTT topic routing. */
+    if (_already_enrolled) {
+        pulsync_nvs_get_str(PULSYNC_NVS_KEY_DEVICE_ID, tcfg.device_id, sizeof(tcfg.device_id));
+    }
 
     pulsync_transport_init(&tcfg);
     pulsync_transport_on_receive(rx_trampoline);
+    /* Re-apply after init so setters that no-op'd in enroll_check take effect. */
+    if (_already_enrolled) {
+        if (_loaded_token[0] != '\0') {
+            pulsync_transport_set_token(_loaded_token);
+        }
+        if (tcfg.device_id[0] != '\0') {
+            pulsync_transport_set_device_id(tcfg.device_id);
+        }
+    }
 
     /* If already enrolled, restore the server-provided MQTT endpoint from NVS
      * so we reconnect to the right broker without re-enrolling. Absent → the
