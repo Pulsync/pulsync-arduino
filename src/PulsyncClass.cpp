@@ -124,8 +124,8 @@ PulsyncClass::PulsyncClass()
       _disc_no_server_logged(false) {
     memset(_server, 0, sizeof(_server));
     /* Hosted HTTP host. Device paths are "/api/device/..." so this yields
-     * e.g. https://pulsync.in/api/device/enroll. */
-    strncpy(_server, "pulsync.in", sizeof(_server) - 1);
+     * e.g. https://pulsync.dev/api/device/enroll. */
+    strncpy(_server, "pulsync.dev", sizeof(_server) - 1);
     memset(_pairing_code, 0, sizeof(_pairing_code));
     memset(_payload_buf, 0, sizeof(_payload_buf));
     memset(_cmd_handlers, 0, sizeof(_cmd_handlers));

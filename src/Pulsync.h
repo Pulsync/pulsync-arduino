@@ -44,7 +44,7 @@ extern "C" {
 /* Built-in server candidates for zero-config discovery. Override via -D flags.
  * Cloud is a TLS domain; local is an mDNS name resolved on the LAN. */
 #ifndef PULSYNC_CLOUD_SERVER
-#define PULSYNC_CLOUD_SERVER  "pulsync.in"
+#define PULSYNC_CLOUD_SERVER  "pulsync.dev"
 #endif
 #ifndef PULSYNC_LOCAL_SERVER
 #define PULSYNC_LOCAL_SERVER  "pulsync.local"

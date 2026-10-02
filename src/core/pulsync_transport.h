@@ -43,7 +43,7 @@ typedef enum {
 
 /** Transport config — set before init */
 typedef struct {
-    char server_host[64];         /* e.g., "10.212.89.160" or "api.pulsync.in" */
+    char server_host[64];         /* e.g., "10.212.89.160" or "api.pulsync.dev" */
     uint16_t http_port;           /* HTTP port (default 3456 local, 443 hosted) */
     uint16_t mqtt_port;           /* MQTT port (default 1883 local, 8883 hosted) */
     char device_token[PULSYNC_TOKEN_MAXLEN]; /* MQTT password only (not in topics) */
@@ -160,7 +160,7 @@ void pulsync_transport_set_server(const char *host, uint16_t http_port, uint16_t
 
 /**
  * Override the MQTT broker target from a full URL, e.g.
- *   "mqtt://192.168.0.103:1883"  or  "mqtts://mqtt.pulsync.in:8883"
+ *   "mqtt://192.168.0.103:1883"  or  "mqtts://mqtt.pulsync.dev:8883"
  * The server hands this back in the enroll response / heartbeat so the device
  * doesn't derive the broker location from the HTTP host. A ".local" host is
  * resolved via mDNS at connect time. Passing NULL/empty clears the override
