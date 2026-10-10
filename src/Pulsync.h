@@ -252,6 +252,13 @@ private:
     int _reset_pin;
     uint32_t _reset_press_start;
     bool _hb_started;  /* heartbeat started once transport first connected */
+    bool _token_ok;    /* HTTPS heartbeat accepted the NVS token this session */
+    bool _reauth;      /* unauthorized recovery is in progress */
+    bool _reauth_wait; /* enroll failed; wait before another attempt */
+    uint32_t _reauth_at;
+    uint32_t _https_hb_at;
+    volatile bool _unauth_pending;
+    void recoverEnrollment();
 
     /* ----- Server discovery (local → cloud failover) -----
      * Runs only when the user gave no explicit server (setServer / NVS). Tries
@@ -288,6 +295,7 @@ public:
                                    const char *device_name);
     void _handlePortalServer(const char *server);
     void _handlePortalRepair(const char *pairing_code);
+    void _noteUnauthorized();
 
 private:
 

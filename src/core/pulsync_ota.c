@@ -406,6 +406,9 @@ static void ota_download_task(void *param) {
     esp_err_t err = esp_https_ota_begin(&ota_config, &ota_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "OTA begin failed: %s", esp_err_to_name(err));
+        /* esp_https_ota does not return the HTTP status. A HEAD with the same
+         * token tells us whether the download was refused as unauthorized. */
+        pulsync_transport_http_head(s_pending_info.url);
         s_state = PULSYNC_OTA_FAILED;
         if (s_complete_cb) s_complete_cb(false, s_pending_info.version);
         goto done;

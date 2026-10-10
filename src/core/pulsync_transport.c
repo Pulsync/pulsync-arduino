@@ -81,6 +81,11 @@ static char s_mqtt_mdns_label[64] = {0};
 static bool s_mqtt_override = false;
 static pulsync_transport_state_t s_state = PULSYNC_TRANSPORT_DISCONNECTED;
 static pulsync_transport_rx_cb_t s_rx_cb = NULL;
+static pulsync_transport_unauth_cb_t s_unauth_cb = NULL;
+
+static void notify_unauthorized(void) {
+    if (s_unauth_cb) s_unauth_cb();
+}
 static pulsync_transport_state_cb_t s_state_cb = NULL;
 static SemaphoreHandle_t s_mutex = NULL;
 
@@ -221,6 +226,17 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t event_
 
         case MQTT_EVENT_ERROR:
             ESP_LOGE(TAG, "MQTT error");
+            /* Only an auth refusal drops the saved token. TCP errors and a
+             * later DISCONNECTED event stay on the normal reconnect path. */
+#ifdef MQTT_ERROR_TYPE_CONNECTION_REFUSED
+            if (event->error_handle &&
+                event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED &&
+                (event->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_BAD_USERNAME ||
+                 event->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED)) {
+                ESP_LOGW(TAG, "MQTT rejected device credentials");
+                notify_unauthorized();
+            }
+#endif
             break;
 
         default:
@@ -540,13 +556,74 @@ int pulsync_transport_queue_capacity(void) {
 
 /* ---------- HTTP ---------- */
 
-bool pulsync_transport_http_post(const char *path, const char *payload, size_t len,
-                                  char *response, size_t resp_max) {
+static int http_perform(const char *url, esp_http_client_method_t method,
+                        const char *payload, int len,
+                        char *response, size_t resp_max) {
+    char token[PULSYNC_TOKEN_MAXLEN];
+    get_token(token, sizeof(token));
+
+    s_http_resp_len = 0;
+    s_http_resp[0] = '\0';
+
+    if (!s_http) {
+        esp_http_client_config_t cfg = {
+            .url = url,
+            .method = method,
+            .timeout_ms = s_http_timeout_ms,
+            .event_handler = http_event_handler,
+            .keep_alive_enable = true,
+            .crt_bundle_attach = s_config.use_tls ? PULSYNC_CRT_BUNDLE_ATTACH : NULL,
+        };
+        s_http = esp_http_client_init(&cfg);
+        if (!s_http) return 0;
+    } else {
+        esp_http_client_set_timeout_ms(s_http, s_http_timeout_ms);
+    }
+
+    esp_http_client_set_url(s_http, url);
+    esp_http_client_set_method(s_http, method);
+    esp_http_client_set_header(s_http, "Content-Type", "application/json");
+    if (token[0] != '\0') {
+        esp_http_client_set_header(s_http, "X-Device-Token", token);
+    } else {
+        esp_http_client_delete_header(s_http, "X-Device-Token");
+    }
+    if (method == HTTP_METHOD_POST) {
+        esp_http_client_set_post_field(s_http, payload ? payload : "", len);
+    } else {
+        esp_http_client_set_post_field(s_http, NULL, 0);
+    }
+
+    esp_err_t err = esp_http_client_perform(s_http);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(s_http);
+        s_http = NULL;
+        return 0;
+    }
+
+    int status = esp_http_client_get_status_code(s_http);
+    if (response && resp_max > 0 && s_http_resp_len > 0) {
+        size_t copy = s_http_resp_len < resp_max - 1 ? s_http_resp_len : resp_max - 1;
+        memcpy(response, s_http_resp, copy);
+        response[copy] = '\0';
+    }
+    if (status == 401) {
+        ESP_LOGW(TAG, "HTTP 401 from %s", url);
+        notify_unauthorized();
+    } else if (status < 200 || status >= 300) {
+        ESP_LOGW(TAG, "HTTP %d from %s", status, url);
+    }
+    return status;
+}
+
+int pulsync_transport_http_post(const char *path, const char *payload, size_t len,
+                                 char *response, size_t resp_max) {
     /* Resolve an mDNS ".local" host to an IP first (enrollment/OTA may run
      * before the MQTT path has resolved it). No-op for plain IP/domain hosts. */
     if (!resolve_local_host()) {
         ESP_LOGW(TAG, "HTTP: server host not resolvable; aborting request.");
-        return false;
+        return 0;
     }
 
     char url[256];
@@ -554,66 +631,22 @@ bool pulsync_transport_http_post(const char *path, const char *payload, size_t l
              s_config.use_tls ? "https" : "http",
              s_config.server_host, s_config.http_port, path);
 
-    char token[PULSYNC_TOKEN_MAXLEN];
-    get_token(token, sizeof(token));
+    return http_perform(url, HTTP_METHOD_POST, payload, (int)len, response, resp_max);
+}
 
-    /* Clear response buffer */
-    s_http_resp_len = 0;
-    s_http_resp[0] = '\0';
-
-    /* Create or reuse HTTP client */
-    if (!s_http) {
-        esp_http_client_config_t cfg = {
-            .url = url,
-            .method = HTTP_METHOD_POST,
-            .timeout_ms = s_http_timeout_ms,
-            .event_handler = http_event_handler,
-            .keep_alive_enable = true,
-            .crt_bundle_attach = s_config.use_tls ? PULSYNC_CRT_BUNDLE_ATTACH : NULL,
-        };
-        s_http = esp_http_client_init(&cfg);
-        if (!s_http) return false;
-    } else {
-        /* Reused client: keep its timeout in sync with the configured value. */
-        esp_http_client_set_timeout_ms(s_http, s_http_timeout_ms);
-    }
-
-    esp_http_client_set_url(s_http, url);
-    esp_http_client_set_method(s_http, HTTP_METHOD_POST);
-    esp_http_client_set_header(s_http, "Content-Type", "application/json");
-    if (token[0] != '\0') {
-        esp_http_client_set_header(s_http, "X-Device-Token", token);
-    }
-    esp_http_client_set_post_field(s_http, payload, (int)len);
-
-    esp_err_t err = esp_http_client_perform(s_http);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "HTTP failed: %s", esp_err_to_name(err));
-        /* Destroy and recreate on next call */
-        esp_http_client_cleanup(s_http);
-        s_http = NULL;
-        return false;
-    }
-
-    int status = esp_http_client_get_status_code(s_http);
-    if (status >= 200 && status < 300) {
-        /* Copy response */
-        if (response && resp_max > 0 && s_http_resp_len > 0) {
-            size_t copy = s_http_resp_len < resp_max - 1 ? s_http_resp_len : resp_max - 1;
-            memcpy(response, s_http_resp, copy);
-            response[copy] = '\0';
-        }
-        return true;
-    }
-
-    ESP_LOGW(TAG, "HTTP %d from %s", status, path);
-    return false;
+int pulsync_transport_http_head(const char *absolute_url) {
+    if (!absolute_url || absolute_url[0] == '\0') return 0;
+    return http_perform(absolute_url, HTTP_METHOD_HEAD, NULL, 0, NULL, 0);
 }
 
 /* ---------- Callbacks ---------- */
 
 void pulsync_transport_on_receive(pulsync_transport_rx_cb_t cb) {
     s_rx_cb = cb;
+}
+
+void pulsync_transport_on_unauthorized(pulsync_transport_unauth_cb_t cb) {
+    s_unauth_cb = cb;
 }
 
 void pulsync_transport_on_state_change(pulsync_transport_state_cb_t cb) {

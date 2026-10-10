@@ -164,14 +164,14 @@ static void enroll_task(void *arg) {
     ESP_LOGI(TAG, "Enrolling: code=%s mac=%s", attempt->pairing_code, mac_str);
     char response[512] = {0};
     pulsync_transport_set_http_timeout(attempt->timeout_ms);
-    bool ok = pulsync_transport_http_post("/api/device/enroll", payload,
-                                          (size_t)len, response, sizeof(response));
+    int status = pulsync_transport_http_post("/api/device/enroll", payload,
+                                             (size_t)len, response, sizeof(response));
     pulsync_transport_set_http_timeout(10000);
 
     /* A re-pair/reset can invalidate this request while HTTP is in flight.
      * Never let its old response overwrite the newer enrollment state. */
     if (attempt->attempt_id == s_attempt_id) {
-        if (!ok) {
+        if (status < 200 || status >= 300) {
             ESP_LOGE(TAG, "Enrollment HTTP request failed");
             s_state = PULSYNC_ENROLL_FAILED;
             if (s_cb) s_cb(false, NULL);

@@ -39,6 +39,10 @@ static void heartbeat_trampoline(const pulsync_heartbeat_response_t *resp) {
     if (s_instance) s_instance->_handleHeartbeatResponse(resp);
 }
 
+static void unauth_trampoline(void) {
+    if (s_instance) s_instance->_noteUnauthorized();
+}
+
 static void portal_creds_trampoline(const char *ssid, const char *password,
                                     const char *server, const char *code,
                                     const char *device_name) {
@@ -119,7 +123,8 @@ void PulsyncClass::_schedTrampoline(void *arg) {
 PulsyncClass::PulsyncClass()
     : _begun(false), _wifi_count(0), _server_explicit(false), _payload_active(false),
       _payload_len(0), _cmd_handler_count(0), _reset_pin(0), _reset_press_start(0),
-      _hb_started(false), _server_mode(AUTO),
+      _hb_started(false), _token_ok(false), _reauth(false), _reauth_wait(false),
+      _reauth_at(0), _https_hb_at(0), _unauth_pending(false), _server_mode(AUTO),
       _disc_state(DISC_TRY_LOCAL), _disc_next_attempt(0),
       _disc_no_server_logged(false) {
     memset(_server, 0, sizeof(_server));
@@ -322,6 +327,7 @@ bool PulsyncClass::_initModules() {
 
     pulsync_transport_init(&tcfg);
     pulsync_transport_on_receive(rx_trampoline);
+    pulsync_transport_on_unauthorized(unauth_trampoline);
     /* Re-apply after init so setters that no-op'd in enroll_check take effect. */
     if (_already_enrolled) {
         if (_loaded_token[0] != '\0') {
@@ -386,6 +392,31 @@ bool PulsyncClass::_initModules() {
     return true;
 }
 
+void PulsyncClass::_noteUnauthorized(void) {
+    _unauth_pending = true;
+}
+
+/* Drop the saved token and enroll again. Wi-Fi drops, broker restarts, and
+ * HTTP 5xx never reach this. A failed enroll waits 60s before another try. */
+void PulsyncClass::recoverEnrollment(void) {
+    pulsync_enroll_state_t st = pulsync_enroll_get_state();
+    if (_reauth && (st == PULSYNC_ENROLL_IN_PROGRESS ||
+                    st == PULSYNC_ENROLL_FAILED ||
+                    st == PULSYNC_ENROLL_NEEDED)) {
+        return;
+    }
+    Serial.println("[PULSYNC] Token rejected — clearing enrollment and pairing again");
+    _reauth = true;
+    _reauth_wait = false;
+    _token_ok = false;
+    _hb_started = false;
+    pulsync_heartbeat_stop();
+    pulsync_transport_stop();
+    pulsync_transport_set_token("");
+    pulsync_enroll_reset();
+    pulsync_enroll_start();
+}
+
 void PulsyncClass::loop() {
     /* Run scheduler (user callbacks) */
     pulsync_scheduler_tick();
@@ -403,19 +434,59 @@ void PulsyncClass::loop() {
         bool ready = (_disc_state == DISC_OVERRIDE || _disc_state == DISC_RESOLVED);
 
         if (ready) {
+            if (_unauth_pending) {
+                _unauth_pending = false;
+                recoverEnrollment();
+            }
+
             /* Enrollment HTTP runs in its own task. loop() only starts it and
-             * observes its state on later passes. */
-            if (pulsync_enroll_get_state() != PULSYNC_ENROLL_DONE &&
-                pulsync_enroll_get_state() != PULSYNC_ENROLL_IN_PROGRESS &&
-                pulsync_enroll_get_state() != PULSYNC_ENROLL_FAILED) {
+             * observes its state on later passes. A rejected token that cannot
+             * enroll (code taken by another board) waits 60s, it does not spin. */
+            pulsync_enroll_state_t st = pulsync_enroll_get_state();
+            if (_reauth && st == PULSYNC_ENROLL_FAILED) {
+                if (!_reauth_wait) {
+                    _reauth_wait = true;
+                    _reauth_at = millis() + 60000;
+                    Serial.println("[PULSYNC] Enroll failed — retrying in 60s");
+                } else if ((int32_t)(millis() - _reauth_at) >= 0) {
+                    _reauth_wait = false;
+                    pulsync_enroll_reset();
+                    pulsync_enroll_start();
+                }
+            } else if (st != PULSYNC_ENROLL_DONE &&
+                       st != PULSYNC_ENROLL_IN_PROGRESS &&
+                       st != PULSYNC_ENROLL_FAILED) {
                 if (!pulsync_enroll_check()) {
                     Serial.println("[PULSYNC] Enrolling via HTTP...");
                     pulsync_enroll_start();
                 }
             }
 
-            /* Start MQTT after enrollment (token needed for auth) */
-            if (pulsync_enroll_get_state() == PULSYNC_ENROLL_DONE) {
+            st = pulsync_enroll_get_state();
+            if (st == PULSYNC_ENROLL_DONE && _reauth) {
+                _reauth = false;
+                _reauth_wait = false;
+                _token_ok = false;
+            }
+
+            /* Confirm the saved token with one HTTPS heartbeat before MQTT.
+             * 401 clears it. Any other failure keeps the token and retries. */
+            if (st == PULSYNC_ENROLL_DONE && !_token_ok &&
+                (int32_t)(millis() - _https_hb_at) >= 0) {
+                int status = pulsync_heartbeat_https_probe();
+                if (status >= 200 && status < 300) {
+                    _token_ok = true;
+                } else if (status != 401) {
+                    _https_hb_at = millis() + 5000;
+                }
+            }
+            if (_unauth_pending) {
+                _unauth_pending = false;
+                recoverEnrollment();
+            }
+
+            /* MQTT only after the HTTPS heartbeat accepts the token. */
+            if (_token_ok && pulsync_enroll_get_state() == PULSYNC_ENROLL_DONE) {
                 pulsync_transport_start();  /* no-op if already started */
 
                 /* Start the heartbeat loop once, the first time the transport
@@ -443,6 +514,7 @@ void PulsyncClass::loop() {
                         pulsync_heartbeat_stop();
                         pulsync_transport_stop();
                         _hb_started = false;
+                        _token_ok = false;
                         pulsync_enroll_reset();   /* force re-enroll on the rediscovered server */
                         pulsync_nvs_erase_key(PULSYNC_NVS_KEY_TOKEN_SRV);
                         _disc_state = DISC_TRY_LOCAL;

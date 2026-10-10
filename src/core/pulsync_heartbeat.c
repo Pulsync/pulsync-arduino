@@ -145,6 +145,18 @@ void pulsync_heartbeat_tick(void) {
     }
 }
 
+int pulsync_heartbeat_https_probe(void) {
+    char payload[256];
+    char response[512] = {0};
+    build_heartbeat_payload(payload, sizeof(payload));
+    int status = pulsync_transport_http_post("/api/device/heartbeat", payload,
+                                              strlen(payload), response, sizeof(response));
+    if (status >= 200 && status < 300) {
+        pulsync_heartbeat_handle_response(response, strlen(response));
+    }
+    return status;
+}
+
 void pulsync_heartbeat_send_now(void) {
     s_send_pending = true;
     pulsync_heartbeat_tick();

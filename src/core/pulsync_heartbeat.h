@@ -65,6 +65,13 @@ void pulsync_heartbeat_tick(void);
 void pulsync_heartbeat_send_now(void);
 
 /**
+ * POST one heartbeat to /api/device/heartbeat over HTTP.
+ * On 2xx, parses the body with pulsync_heartbeat_handle_response.
+ * @return HTTP status, or 0 if the request never completed.
+ */
+int pulsync_heartbeat_https_probe(void);
+
+/**
  * Process heartbeat response from server.
  * Called by transport rx handler when response arrives.
  */

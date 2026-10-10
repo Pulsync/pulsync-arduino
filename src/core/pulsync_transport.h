@@ -57,6 +57,9 @@ typedef void (*pulsync_transport_rx_cb_t)(const char *topic, const char *payload
 /** Callback for transport state changes */
 typedef void (*pulsync_transport_state_cb_t)(pulsync_transport_state_t state);
 
+/** Fired once when the server rejects the device token (HTTP 401 or MQTT auth). */
+typedef void (*pulsync_transport_unauth_cb_t)(void);
+
 /* ---------- Initialization ---------- */
 
 /**
@@ -111,17 +114,25 @@ int pulsync_transport_queue_capacity(void);
 /* ---------- HTTP (enrollment, OTA) ---------- */
 
 /**
- * Send an HTTP POST request (for enrollment).
+ * Send an HTTP POST request (enrollment, heartbeat probe).
  * Blocking — waits for response.
  * @param path       URL path (e.g., "/api/device/enroll")
  * @param payload    JSON body
  * @param len        Body length
  * @param response   Buffer to store response body
  * @param resp_max   Response buffer size
- * @return true if request succeeded (2xx status)
+ * @return HTTP status, or 0 if the request never completed.
+ *         A 401 also fires the unauthorized callback.
  */
-bool pulsync_transport_http_post(const char *path, const char *payload, size_t len,
-                                  char *response, size_t resp_max);
+int pulsync_transport_http_post(const char *path, const char *payload, size_t len,
+                                 char *response, size_t resp_max);
+
+/**
+ * HEAD an absolute URL with the device token (OTA auth check).
+ * @return HTTP status, or 0 if the request never completed.
+ *         A 401 also fires the unauthorized callback.
+ */
+int pulsync_transport_http_head(const char *absolute_url);
 
 /**
  * Set the HTTP request timeout in milliseconds (applies to subsequent
@@ -141,6 +152,14 @@ void pulsync_transport_on_receive(pulsync_transport_rx_cb_t cb);
  * Register callback for state changes.
  */
 void pulsync_transport_on_state_change(pulsync_transport_state_cb_t cb);
+
+/**
+ * Register callback for a rejected device token.
+ * HTTP 401 and an MQTT connection refusal (bad credentials) call this.
+ * A plain disconnect does not. The callback must only set a flag — it runs
+ * from the MQTT task as well as the HTTP caller.
+ */
+void pulsync_transport_on_unauthorized(pulsync_transport_unauth_cb_t cb);
 
 /* ---------- Token management ---------- */
 
