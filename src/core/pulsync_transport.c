@@ -225,18 +225,19 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t event_
         }
 
         case MQTT_EVENT_ERROR:
-            ESP_LOGE(TAG, "MQTT error");
             /* Only an auth refusal drops the saved token. TCP errors and a
-             * later DISCONNECTED event stay on the normal reconnect path. */
-#ifdef MQTT_ERROR_TYPE_CONNECTION_REFUSED
+             * later DISCONNECTED event stay on the normal reconnect path.
+             * These names are enums, not macros — do not wrap them in #ifdef. */
             if (event->error_handle &&
                 event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED &&
                 (event->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_BAD_USERNAME ||
                  event->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED)) {
-                ESP_LOGW(TAG, "MQTT rejected device credentials");
+                ESP_LOGE(TAG, "MQTT rejected device credentials (code %d)",
+                         (int)event->error_handle->connect_return_code);
                 notify_unauthorized();
+            } else {
+                ESP_LOGE(TAG, "MQTT error");
             }
-#endif
             break;
 
         default:
