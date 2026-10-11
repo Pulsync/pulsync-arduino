@@ -8,6 +8,7 @@
 #include "Pulsync.h"
 #include <cstring>
 #include <cstdio>
+#include "esp_system.h"
 
 /* ---------- Global instance ---------- */
 
@@ -124,7 +125,7 @@ PulsyncClass::PulsyncClass()
     : _begun(false), _wifi_count(0), _server_explicit(false), _payload_active(false),
       _payload_len(0), _cmd_handler_count(0), _reset_pin(0), _reset_press_start(0),
       _hb_started(false), _token_ok(false), _reauth(false), _reauth_wait(false),
-      _reauth_at(0), _https_hb_at(0), _unauth_pending(false), _server_mode(AUTO),
+      _reauth_at(0), _https_hb_at(0), _reboot_at(0), _unauth_pending(false), _server_mode(AUTO),
       _disc_state(DISC_TRY_LOCAL), _disc_next_attempt(0),
       _disc_no_server_logged(false) {
     memset(_server, 0, sizeof(_server));
@@ -418,6 +419,11 @@ void PulsyncClass::recoverEnrollment(void) {
 }
 
 void PulsyncClass::loop() {
+    /* Reboot was requested from the MQTT task. Restart here, off that task. */
+    if (_reboot_at != 0 && (int32_t)(millis() - _reboot_at) >= 0) {
+        esp_restart();
+    }
+
     /* Run scheduler (user callbacks) */
     pulsync_scheduler_tick();
 
@@ -1090,6 +1096,12 @@ void PulsyncClass::_handleRx(const char *topic, const char *payload, size_t len)
                     }
                     break;
                 }
+            }
+
+            /* Built-in reboot. A user on("reboot") handler above runs first
+             * (save state, turn outputs off). The library still restarts. */
+            if (strcmp(cmd_name, "reboot") == 0 && _reboot_at == 0) {
+                _reboot_at = millis() + 1000;
             }
         }
     }

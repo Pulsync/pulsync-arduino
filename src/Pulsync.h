@@ -257,6 +257,7 @@ private:
     bool _reauth_wait; /* enroll failed; wait before another attempt */
     uint32_t _reauth_at;
     uint32_t _https_hb_at;
+    uint32_t _reboot_at; /* millis when a reboot command should restart */
     volatile bool _unauth_pending;
     void recoverEnrollment();
 
